@@ -1,3 +1,11 @@
+If not setup
+
+Run Virtuals-ShoonKit setup_g1
+verify_g1
+sudo systemctl stop g1-camera
+run stream_zed.py and stream_rs.py
+
+
 # Viewing camera streams in FoxGlove (ROS2)
 
 These scripts publish camera images as ROS2 **Image** topics so you can view them in [FoxGlove Studio](https://foxglove.dev/) (or `rqt_image_view`).
