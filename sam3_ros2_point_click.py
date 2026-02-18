@@ -79,11 +79,12 @@ class SAM3PointClickNode(Node):
         self._result_bgr = None
         self._result_stamp = None
         self._target_point = None  # (x, y) or None
-        self._target_bbox = None  # (x1, y1, x2, y2) or None; F key sets bbox around center
+        self._target_bbox = None  # (x1, y1, x2, y2) or None; drag sets bbox
         self._tracked_point = None  # (x, y) centroid of last mask; used next frame when tracking
         self._last_click_display = None  # (x, y) last click coords for debug text
         self._click_count = 0
-        self._cursor_xy = None  # (x, y) keyboard crosshair; None = use image center until first frame
+        self._bbox_drag_start = None  # (x, y) set on LBUTTONDOWN, used on LBUTTONUP to form bbox
+        self._bbox_drag_current = None  # (x, y) current mouse pos while dragging; for preview rect
 
         self.sub = self.create_subscription(Image, topic_in, self._image_cb, 10)
         self.pub = self.create_publisher(Image, topic_out, 10)
@@ -94,7 +95,7 @@ class SAM3PointClickNode(Node):
         if use_hf and self._tracking:
             mode += ", tracking across frames"
         self.get_logger().info(
-            f"SAM 3: sub={topic_in} -> pub={topic_out} @ {process_hz} Hz, {mode} (click/S=point F=bbox c=clear)"
+            f"SAM 3: sub={topic_in} -> pub={topic_out} @ {process_hz} Hz, {mode} (click/drag c=clear)"
         )
 
     def _image_cb(self, msg: Image):
@@ -138,68 +139,41 @@ class SAM3PointClickNode(Node):
                 self._last_click_display = (x, y)
                 self._click_count += 1
         if self._debug:
-            self.get_logger().info(f"[debug] Target set at ({x}, {y})" + (" [click]" if from_click else " [S key]"))
+            self.get_logger().info(f"[debug] Target set at ({x}, {y})" + (" [click]" if from_click else ""))
 
-    def set_target_bbox_center(self, half_size: int = 250):
-        """Set a bounding box around image center (like S but bbox). F key."""
+    def set_target_bbox_from_corners(self, x1: int, y1: int, x2: int, y2: int):
+        """Set target bbox from two corners (e.g. from drag). Normalizes to (x_min, y_min, x_max, y_max) and clips to image."""
         with self._lock:
             bgr = self._latest_bgr
         if bgr is None:
-            return False
+            return
         h, w = bgr.shape[:2]
-        cx, cy = w // 2, h // 2
-        x1 = max(0, cx - half_size)
-        y1 = max(0, cy - half_size)
-        x2 = min(w, cx + half_size)
-        y2 = min(h, cy + half_size)
+        x_min = max(0, min(x1, x2))
+        y_min = max(0, min(y1, y2))
+        x_max = max(0, min(w, max(x1, x2)))
+        y_max = max(0, min(h, max(y1, y2)))
+        if x_max <= x_min:
+            x_max = x_min + 1
+        if y_max <= y_min:
+            y_max = y_min + 1
         with self._lock:
-            self._target_bbox = (x1, y1, x2, y2)
+            self._target_bbox = (x_min, y_min, x_max, y_max)
             self._target_point = None
             self._tracked_point = None
         if self._debug:
-            self.get_logger().info(f"[debug] Target bbox at center: ({x1},{y1})-({x2},{y2})")
-        return True
+            self.get_logger().info(f"[debug] Target bbox from drag: ({x_min},{y_min})-({x_max},{y_max})")
 
     def clear_target(self):
         with self._lock:
             self._target_point = None
             self._target_bbox = None
             self._tracked_point = None
+            self._bbox_drag_start = None
+            self._bbox_drag_current = None
             self._result_bgr = None
             self._result_stamp = None
         if self._debug:
             self.get_logger().info("[debug] Target cleared")
-
-    def move_cursor(self, dx: int, dy: int):
-        """Move keyboard crosshair by (dx, dy); bounds checked in get_display_frame."""
-        with self._lock:
-            bgr = self._latest_bgr
-        if bgr is None:
-            return
-        h, w = bgr.shape[:2]
-        with self._lock:
-            cur = self._cursor_xy
-        if cur is None:
-            cur = (w // 2, h // 2)
-        self._cursor_xy = (max(0, min(w - 1, cur[0] + dx)), max(0, min(h - 1, cur[1] + dy)))
-
-    def set_cursor(self, x: int, y: int):
-        with self._lock:
-            self._cursor_xy = (x, y)
-
-    def set_target_at_cursor(self):
-        """Set target to current keyboard cursor position. Returns True if set."""
-        with self._lock:
-            bgr = self._latest_bgr
-            cur = self._cursor_xy
-        if bgr is None:
-            return False
-        h, w = bgr.shape[:2]
-        if cur is None:
-            cur = (w // 2, h // 2)
-        x, y = max(0, min(w - 1, cur[0])), max(0, min(h - 1, cur[1]))
-        self.set_target(x, y, from_click=False)
-        return True
 
     def _publish_stream(self):
         with self._lock:
@@ -210,19 +184,13 @@ class SAM3PointClickNode(Node):
         self.pub.publish(self._bgr_to_msg(bgr, stamp=stamp))
 
     def get_display_frame(self):
-        """Return BGR to show; draw target point or keyboard crosshair."""
+        """Return BGR to show; draw target point or bbox if set."""
         with self._lock:
             bgr = self._result_bgr if self._result_bgr is not None else self._latest_bgr
         if bgr is None:
             return None
         disp = bgr.copy()
         h, w = disp.shape[:2]
-        with self._lock:
-            cur = self._cursor_xy
-            if cur is None:
-                self._cursor_xy = (w // 2, h // 2)
-                cur = self._cursor_xy
-        cx, cy = max(0, min(w - 1, cur[0])), max(0, min(h - 1, cur[1]))
         if self._tracking and self._tracked_point is not None:
             px, py = int(round(self._tracked_point[0])), int(round(self._tracked_point[1]))
             px, py = max(0, min(w - 1, px)), max(0, min(h - 1, py))
@@ -230,18 +198,22 @@ class SAM3PointClickNode(Node):
         elif self._target_point is not None:
             px, py = self._target_point
             cv2.circle(disp, (px, py), 6, (0, 255, 0), 2)
-        else:
-            # No target: draw keyboard crosshair so user can move with arrows and press Enter
-            cv2.circle(disp, (cx, cy), 8, (0, 255, 255), 1)
-            cv2.drawMarker(disp, (cx, cy), (0, 255, 255), cv2.MARKER_CROSS, 12, 1)
         with self._lock:
             bbox = self._target_bbox
+            drag_start = self._bbox_drag_start
+            drag_current = self._bbox_drag_current
         if bbox is not None:
             x1, y1, x2, y2 = bbox
             cv2.rectangle(disp, (x1, y1), (x2, y2), (255, 0, 255), 2)
+        if drag_start is not None and drag_current is not None:
+            sx, sy = drag_start
+            cx, cy = drag_current
+            x1, x2 = min(sx, cx), max(sx, cx)
+            y1, y2 = min(sy, cy), max(sy, cy)
+            cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 255), 2)
         font_scale = 0.6
         thickness = 1
-        hint = "Right-click or S=point F=bbox c=clear" + (" (tracking)" if self._tracking else "") if self._use_hf else f"Segment: {self._text_prompts}"
+        hint = "Click=point drag=bbox c=clear" + (" (tracking)" if self._tracking else "") if self._use_hf else f"Segment: {self._text_prompts}"
         cv2.putText(disp, f"{hint} | c=clear q=quit",
                     (10, disp.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
         with self._lock:
@@ -403,6 +375,35 @@ class SAM3PointClickNode(Node):
                 import traceback
                 self.get_logger().info(f"[debug] {traceback.format_exc()}")
 
+def on_mouse(event, mx, my, _flags, param):
+    if param is None:
+        return
+    if event == cv2.EVENT_LBUTTONDOWN:
+        with param._lock:
+            param._bbox_drag_start = (mx, my)
+            param._bbox_drag_current = (mx, my)
+        print(f"[mouse] Down at ({mx}, {my})")
+    elif event == cv2.EVENT_MOUSEMOVE:
+        with param._lock:
+            if param._bbox_drag_start is not None:
+                param._bbox_drag_current = (mx, my)
+    elif event == cv2.EVENT_LBUTTONUP:
+        with param._lock:
+            start = param._bbox_drag_start
+            param._bbox_drag_start = None
+            param._bbox_drag_current = None
+        if start is None:
+            return
+        x1, y1 = start
+        x2, y2 = mx, my
+        # Small drag = single point; larger drag = bbox
+        min_side = 8
+        if abs(x2 - x1) < min_side and abs(y2 - y1) < min_side:
+            param.set_target(mx, my, from_click=True)
+            print(f"[mouse] Up at ({mx}, {my}) -> point")
+        else:
+            param.set_target_bbox_from_corners(x1, y1, x2, y2)
+            print(f"[mouse] Up at ({mx}, {my}) -> bbox")
 
 def main(args=None):
     parser = argparse.ArgumentParser(
@@ -488,40 +489,24 @@ def main(args=None):
             rclpy.shutdown()
             return 1
 
-    stream_win = "SAM 3 — streaming video (point-click)" if use_hf else "SAM 3 — streaming video (text)"
+    stream_win = "SAM3 point-click" if use_hf else "SAM3 text"
     placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(placeholder, "Waiting... Right-click or W/A/D/E + Enter or S=center", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    placeholder[:] = (40, 40, 40)
+    cv2.putText(placeholder, "Click=point drag=bbox c=clear q=quit", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     cv2.namedWindow(stream_win)
     cv2.imshow(stream_win, placeholder)
-    # Give Qt time to create the window before attaching mouse callback
     for _ in range(20):
         if cv2.waitKey(50) >= 0:
             break
-
-    def on_mouse(event, mx, my, _flags, param):
-        # event: 1=LEFT_DOWN, 2=RIGHT_DOWN on OpenCV. Right often works when left doesn't (Qt/X11).
-        if event == 1:  # EVENT_LBUTTONDOWN
-            print(f"[mouse] LEFT at ({mx}, {my}) -> set target")
-            if param is not None:
-                param.set_target(mx, my, from_click=True)
-        elif event == 2:  # EVENT_RBUTTONDOWN
-            print(f"[mouse] RIGHT at ({mx}, {my}) -> set target")
-            if param is not None:
-                param.set_target(mx, my, from_click=True)
-        elif event in (1, 2, 3):
-            print(f"[mouse] event={event} at ({mx}, {my})")
-
     try:
         cv2.setMouseCallback(stream_win, on_mouse, node)
-        print("[mouse] Callback attached. Right-click or left-click in window to set point.")
+        print("[mouse] Callback attached. Click in window to set point.")
     except cv2.error as e:
-        print(f"[mouse] setMouseCallback failed: {e}. Use arrows + Enter or S instead.")
-
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
+        print(f"[mouse] setMouseCallback failed: {e}")
 
     try:
         while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0)
             disp = node.get_display_frame()
             if disp is not None:
                 cv2.imshow(stream_win, disp)
@@ -535,27 +520,6 @@ def main(args=None):
                 break
             if key_low == ord("c"):
                 node.clear_target()
-            elif key_low == ord("s"):
-                with node._lock:
-                    latest = node._latest_bgr
-                if latest is not None:
-                    h, w = latest.shape[:2]
-                    node.set_target(w // 2, h // 2, from_click=False)
-            elif key_low == ord("f"):
-                if node.set_target_bbox_center():
-                    print("[key] F -> bbox at center")
-            elif key_low == 13 or key_low == 10:  # Enter
-                if node.set_target_at_cursor():
-                    print("[key] Enter -> target set at cursor")
-            # Arrow keys (waitKeyEx) or W/A/D/E (up/left/right/down; S=center)
-            elif key_low == ord("a") or key == 63234:  # Left
-                node.move_cursor(-15, 0)
-            elif key_low == ord("d") or key == 63235:  # Right
-                node.move_cursor(15, 0)
-            elif key_low == ord("w") or key == 63232:  # Up
-                node.move_cursor(0, -15)
-            elif key_low == ord("e") or key == 63233:  # Down (E or Down arrow)
-                node.move_cursor(0, 15)
     finally:
         cv2.destroyAllWindows()
         node.destroy_node()
