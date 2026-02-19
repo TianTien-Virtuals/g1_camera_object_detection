@@ -13,9 +13,9 @@ Backends:
 
 Requires: ultralytics + sam3.pt (default), or transformers + accelerate (--use-hf).
 Usage (streaming video from camera topic):
-  python3 sam3_ros2_point_click.py --use-hf --model-dir ./sam3_pt --topic-in /camera/realsense/image_raw --hz 1
+  python3 sam3_ros2_point_click.py --use-hf --model-dir ./sam3_pt --topic-in /humanoid/realsense/image_raw --hz 1
   python3 sam3_ros2_point_click.py --use-hf --tracking --model-dir ./sam3_pt ...   # track object across frames
-  python3 sam3_ros2_point_click.py --model sam3.pt --text chair --topic-in /camera/realsense/image_raw --hz 1
+  python3 sam3_ros2_point_click.py --model sam3.pt --text chair --topic-in /humanoid/realsense/image_raw --hz 1
 """
 
 import argparse
@@ -416,8 +416,8 @@ def main(args=None):
     parser.add_argument("--model-dir", type=str, default=None,
                         help="Local dir for HF model (e.g. ./sam3_pt). If set with --use-hf, load from here (no Hugging Face access).")
     parser.add_argument("--model", type=str, default="sam3.pt", help="Path to sam3.pt (Ultralytics; ignored if --use-hf)")
-    parser.add_argument("--topic-in", type=str, default="/camera/realsense/image_raw")
-    parser.add_argument("--topic-out", type=str, default="/camera/realsense/sam3_segmentation")
+    parser.add_argument("--topic-in", type=str, default="/humanoid/realsense/image_raw")
+    parser.add_argument("--topic-out", type=str, default="/humanoid/realsense/sam3_segmentation")
     parser.add_argument("--text", type=str, nargs="+", default=["chair"], help="Text prompts when not --use-hf")
     parser.add_argument("--hz", type=float, default=1.0, help="Segmentation rate (Hz)")
     parser.add_argument("--conf", type=float, default=0.25)

@@ -94,7 +94,7 @@ python3 source/stream_rs_ros2.py --ip 192.168.50.251
 ```
 
 **Topics:**  
-`/camera/realsense/image_raw` (single topic; if the server sends multiple cameras, the first by name is used)
+`/humanoid/realsense/image_raw` (single topic; if the server sends multiple cameras, the first by name is used)
 
 **Where is the RealSense stream coming from?**  
 The RealSense frames are **streamed from the robot** (or whatever host runs the Unitree camera stack) over **ZMQ** on **port 5555**:
@@ -169,9 +169,23 @@ To get data from `stream_zed_client_ros2.py` and view it in FoxGlove:
 4. **Open FoxGlove Studio** (desktop or https://foxglove.dev/studio):
    - **Open connection** → **Foxglove WebSocket** → URL `ws://localhost:8765` → **Open**.
    - **Add panel** → **Image**.
-   - In the Image panel settings, set the topic to **`/camera/zed/image_raw`**.
+   - In the Image panel settings, set the topic to **`/camera/zed/image_raw`** (or **`/camera/zed/depth`** for depth).
 
 Order: start (1) and (2) first so the topic exists, then (3) bridge, then (4) connect FoxGlove so the topic appears in the list.
+
+### View depth as 3D in Foxglove
+
+To see depth as a **3D point cloud** in Foxglove:
+
+1. Ensure the ZED server sends depth (e.g. `stream_zed.py` with depth enabled) and the client publishes **`/camera/zed/depth`** (and **`/camera/zed/image_raw`** for color).
+2. Run the depth→pointcloud node:
+   ```bash
+   python3 depth_to_pointcloud_ros2.py
+   ```
+   This subscribes to `/camera/zed/depth` and optionally `/camera/zed/image_raw`, and publishes **`/camera/zed/points`** (PointCloud2).
+3. In Foxglove: **Add panel** → **3D**. In the 3D panel settings, add a **PointCloud** layer and set the topic to **`/camera/zed/points`**.
+
+You can tune intrinsics if needed: `--fx`, `--fy`, `--cx`, `--cy` (defaults assume ~720p; use your ZED resolution). Use `--step 4` to reduce points for performance.
 
 **If `ros2 topic list` doesn’t show `/camera/zed/image_raw` or `ros2 topic hz /camera/zed/image_raw` shows no messages:**
 
@@ -190,7 +204,7 @@ Order: start (1) and (2) first so the topic exists, then (3) bridge, then (4) co
 3. **Add an Image panel:**  
    - Add panel → **Image**.  
    - Select topic:  
-     - RealSense: `/camera/realsense/image_raw`  
+     - RealSense: `/humanoid/realsense/image_raw`  
      - ZED: `/camera/zed/image_raw` (or `/camera/zed/depth` for depth).
 
 ### Using foxglove_bridge (recommended for FoxGlove Studio)
@@ -282,7 +296,7 @@ source /opt/ros/jazzy/setup.bash
 python3 source/sam3_ros2.py --model sam3.pt --topic-in /camera/zed/image_raw --text person car --hz 2
 ```
 
-- **`--topic-in`**: Image topic to segment (e.g. `/camera/zed/image_raw` or `/camera/realsense/image_raw`).
+- **`--topic-in`**: Image topic to segment (e.g. `/humanoid/zed/image_raw` or `/humanoid/realsense/image_raw`).
 - **`--topic-out`**: Where to publish the result (default: `/camera/zed/sam3_segmentation`).
 - **`--text`**: Space-separated concept prompts (default: `person`).
 - **`--hz`**: Processing rate in Hz (default 2); lower saves GPU/CPU.

@@ -87,10 +87,10 @@
         "poseEstimateThetaDeviation": 0.26179939
       },
       "imageMode": {
-        "imageTopic": "/camera/realsense/sam3_segmentation",
+        "imageTopic": "/humanoid/realsense/sam3_segmentation",
         "rotation": 0
       },
-      "foxglovePanelTitle": "/camera/realsense/sam3_segmentation"
+      "foxglovePanelTitle": "/humanoid/realsense/sam3_segmentation"
     }
   },
   "globalVariables": {

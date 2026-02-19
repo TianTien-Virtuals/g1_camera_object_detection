@@ -8,7 +8,7 @@ as sensor_msgs/msg/Image on ROS2 topics for viewing in FoxGlove (or rqt_image_vi
 Usage:
   source /opt/ros/<distro>/setup.bash
   python3 stream_rs_ros2.py --ip 192.168.50.251
-  # Topic: /camera/realsense/image_raw (single topic; if multiple cameras, first by name is used)
+  # Topic: /humanoid/realsense/image_raw (single topic; if multiple cameras, first by name is used)
 """
 
 import base64
@@ -41,9 +41,9 @@ def decode_image(image_b64: str) -> np.ndarray:
 
 
 class RealSenseRos2Bridge(Node):
-    """Publishes RealSense ZMQ stream to ROS2 Image topic /camera/realsense/image_raw."""
+    """Publishes RealSense ZMQ stream to ROS2 Image topic /humanoid/realsense/image_raw."""
 
-    TOPIC = "/camera/realsense/image_raw"
+    TOPIC = "/humanoid/realsense/image_raw"
 
     def __init__(self, robot_ip: str):
         super().__init__("realsense_ros2_bridge")
