@@ -175,6 +175,12 @@ class SAM3PointClickNode(Node):
         if self._debug:
             self.get_logger().info("[debug] Target cleared")
 
+    def set_text_prompt(self, prompts: list):
+        """Change text prompt at runtime (for Ultralytics mode). prompts: e.g. ['chair'] or ['person', 'bottle']."""
+        with self._lock:
+            self._text_prompts = prompts if prompts else ["person"]
+        self.get_logger().info(f"Text prompt set to: {self._text_prompts}")
+
     def _publish_stream(self):
         with self._lock:
             bgr = self._result_bgr if self._result_bgr is not None else self._latest_bgr
@@ -213,7 +219,7 @@ class SAM3PointClickNode(Node):
             cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 255), 2)
         font_scale = 0.6
         thickness = 1
-        hint = "Click=point drag=bbox c=clear" + (" (tracking)" if self._tracking else "") if self._use_hf else f"Segment: {self._text_prompts}"
+        hint = "Click=point drag=bbox c=clear" + (" (tracking)" if self._tracking else "") if self._use_hf else f"Segment: {self._text_prompts} t=change"
         cv2.putText(disp, f"{hint} | c=clear q=quit",
                     (10, disp.shape[0] - 8), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
         with self._lock:
@@ -314,13 +320,23 @@ class SAM3PointClickNode(Node):
                     )
                 mask_bool = mask_np > 0.5
                 out_bgr = bgr.copy()
-                out_bgr[mask_bool] = [0, 255, 0]
+                # Transparent overlay: blend original with mask color (0=opaque mask, 1=invisible)
+                mask_alpha = 0.5  # 1 - overlay strength: higher = more transparent (more original shows)
+                overlay_bgr = np.array([0, 255, 0], dtype=np.float32)  # BGR green
+                out_bgr[mask_bool] = (
+                    mask_alpha * bgr[mask_bool].astype(np.float32)
+                    + (1.0 - mask_alpha) * overlay_bgr
+                ).astype(np.uint8)
                 # Tracking: update point to mask centroid for next frame so object is tracked across frames
                 if self._tracking and mask_bool.any():
                     ys, xs = np.where(mask_bool)
                     cy, cx = float(ys.mean()), float(xs.mean())
                     with self._lock:
                         self._tracked_point = (cx, cy)
+                        # After first frame with a box, switch to point tracking so the mask follows the object
+                        if bbox is not None:
+                            self._target_bbox = None
+                            self._target_point = None
                 if self._debug:
                     self.get_logger().info(
                         f"[debug] HF SAM 3: 1 mask" + (f" bbox={bbox}" if bbox else f" at ({x},{y})")
@@ -492,7 +508,7 @@ def main(args=None):
     stream_win = "SAM3 point-click" if use_hf else "SAM3 text"
     placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
     placeholder[:] = (40, 40, 40)
-    cv2.putText(placeholder, "Click=point drag=bbox c=clear q=quit", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    cv2.putText(placeholder, "t=change text (text mode) c=clear q=quit", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     cv2.namedWindow(stream_win)
     cv2.imshow(stream_win, placeholder)
     for _ in range(20):
@@ -520,6 +536,14 @@ def main(args=None):
                 break
             if key_low == ord("c"):
                 node.clear_target()
+            elif key_low == ord("t") and not use_hf:
+                try:
+                    new_prompt = input("New text prompt (e.g. person): ").strip()
+                    if new_prompt:
+                        node.set_text_prompt([new_prompt])
+                        print(f"[key] Text prompt set to: {new_prompt}")
+                except (EOFError, KeyboardInterrupt):
+                    pass
     finally:
         cv2.destroyAllWindows()
         node.destroy_node()
